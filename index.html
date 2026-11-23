@@ -76,7 +76,7 @@ const TT={ // tower types: range, dmg, rate, flags
 const ET={rat:{hp:.5,sp:1.6,b:.6,col:'#9a948c'},grunt:{hp:1,sp:1,b:1,col:'#7a5a3a'},knight:{hp:2,sp:.8,b:1.6,ar:.5,col:'#c8ccd4'},bat:{hp:.8,sp:1,b:1.2,fly:1,col:'#8b5fbf'},mino:{hp:12,sp:.6,b:14,boss:1,col:'#8a3b22'}};
 const BUILD=60, upCost=t=>BUILD*Math.pow(1.6,t.lvl);
 // ---------- state ----------
-let level=1,core=20,adapt=1,leaks=0,speed=1,sfx=false,phase='build',phaseT=1.2,msg='The labyrinth stirs.',totalKills=0;
+const CORE=10;let attempt=1,level=1,core=10,adapt=1,leaks=0,speed=1,sfx=false,phase='build',phaseT=1.2,msg='The labyrinth stirs.',totalKills=0;
 const cells=[],at=new Map(),key=(x,y)=>x+','+y;
 let exit=0,gates=[],dist=[],pits=new Map(),visited=new Set(),finished=[new Set(),new Set(),new Set(),new Set()];
 let spots=[],towers=[],tmap=new Map(),enemies=[],queue=[],fx=[];
@@ -126,7 +126,8 @@ function analyse(){ // distances to the core, enemy gates, tower spots
  const far=[...leaves].sort((a,b)=>dist[b]-dist[a]);for(let g=0;g<4;g++)if(gates[g]<0)gates[g]=far[g%far.length]??far[0]??exit;
  const seen=new Set();spots=[];for(const c of cells)for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const x=c.x+dx,y=c.y+dy,k=key(x,y);if(at.has(k)||seen.has(k))continue;seen.add(k);
   let cov=0;for(let ax=-3;ax<=3;ax++)for(let ay=-3;ay<=3;ay++)if(ax*ax+ay*ay<=9&&at.has(key(x+ax,y+ay)))cov++;spots.push({x,y,k,cov})}
- spots.sort((a,b)=>b.cov-a.cov)}
+ let mr=1;for(const c of cells)mr=Math.max(mr,Math.hypot(c.x,c.y));for(const s of spots)s.score=s.cov*(.35+Math.hypot(s.x,s.y)/mr);
+ spots.sort((a,b)=>b.score-a.score)}
 function newPits(){pits.clear()} // pits removed
 // ---------- waves ----------
 const G=()=>Math.pow(1.05,level);
@@ -137,7 +138,7 @@ function waveFor(L){const w=[],n=6+Math.floor(L/10);
  if(L%10===0)w.push('mino');return w}
 function preview(L){const c={};for(const t of waveFor(L))c[t]=(c[t]||0)+1;const nm={grunt:'Grunt',rat:'Rat',knight:'Knight',bat:'Bat',mino:'Minotaur'};return Object.entries(c).map(([t,n])=>`<span>${nm[t]} ×${n}</span>`).join('')}
 function startWave(){const list=waveFor(level);let t=0.5;queue=list.map((type,i)=>({type,gate:i%4,t:t+=type==='rat'?0.35:0.8}));phase='wave';leaks=0;visited=new Set();finished=[new Set(),new Set(),new Set(),new Set()];EX.forEach(e=>e.kills=0)}
-function spawn(s){const T=ET[s.type],g=gates[s.gate],c=cells[g],hp=30*G()*adapt*T.hp;
+function spawn(s){const T=ET[s.type],g=gates[s.gate],c=cells[g],hp=30*G()*T.hp;
  enemies.push({type:s.type,T,hp,max:hp,gate:s.gate,cell:g,from:g,to:g,t:1,x:c.x,y:c.y,stack:[],seen:new Set([g]),slow:0,fly:T.fly,fx:c.x,fy:c.y,prog:dist[g]})}
 // ---------- simulation ----------
 function choose(e){const i=e.cell;if(i===exit){leak(e);return}
@@ -155,7 +156,7 @@ function step(dt){
   e.t+=sp*(e.known?5:1)*dt;if(e.t>=1){e.cell=e.to;e.x=cells[e.cell].x;e.y=cells[e.cell].y;choose(e)}else{const a=cells[e.from],b=cells[e.to];e.x=a.x+(b.x-a.x)*e.t;e.y=a.y+(b.y-a.y)*e.t}
   e.prog=dist[e.to]-(e.t<1?0:0)}
  for(let i=towers.length-1;i>0;i--){const j=(R()*(i+1))|0;[towers[i],towers[j]]=[towers[j],towers[i]]}
- for(const t of towers){t.cd-=dt;if(t.cd>0)continue;const T=TT[t.type],r2=T.r*T.r,dm=T.d*Math.pow(1.65,t.lvl-1);
+ for(const t of towers){t.cd-=dt;if(t.cd>0)continue;const T=TT[t.type],r2=T.r*T.r,dm=T.d*Math.pow(1.6,t.lvl-1);
   const inR=enemies.filter(e=>!e.dead&&(T.air||!e.fly)&&(e.x-t.x)**2+(e.y-t.y)**2<=r2);if(!inR.length)continue;t.cd=1/T.f;
   if(T.aoe){for(const e of inR){hit(e,dm,t);e.slow=1}fx.push({k:'ring',x:t.x,y:t.y,r:T.r,c:EX[t.o].c,t:.3})}
   else{const e=T.mode==='strongest'?inR.reduce((a,b)=>b.hp>a.hp?b:a):inR.reduce((a,b)=>b.prog<a.prog?b:a);hit(e,T.pierce?dm/(1-(e.T.ar||0)):dm,t);fx.push({k:'shot',x:t.x,y:t.y,x2:e.x,y2:e.y,c:EX[t.o].c,t:.15})}}
@@ -163,27 +164,25 @@ function step(dt){
  if(core<=0){collapse();return}
  if(!queue.length&&!enemies.length)endLevel()}
 function hit(e,d,t){if(e.dead)return;e.hp-=d*(1-(e.T.ar||0));if(e.hp<=0){e.dead=1;const ex=EX[t.o];ex.kills++;ex.total++;totalKills++;const g=2.2*G()*e.T.b;EX.forEach(x=>x.gold+=g/4);fx.push({k:'pop',x:e.x,y:e.y,c:ex.c,t:.4});if(R()<.3)beep(520+R()*200,.04)}}
-function collapse(){phase='fallen';phaseT=1.8;msg='The labyrinth falls! Towers crumble…';beep(50,.6);
- for(const e of enemies)e.dead=1;enemies=[];queue=[];
- towers=towers.filter(t=>{if(R()<.05){tmap.delete(t.k);return false}return true});adapt=Math.max(1e-9,adapt*.7);core=20;const bonus=10*G();EX.forEach(x=>x.gold+=bonus/4)}
+function collapse(){phase='fallen';phaseT=1.6;attempt++;msg=`The core broke! Level ${level} starts again (attempt ${attempt}).`;beep(50,.6);
+ for(const e of enemies)e.dead=1;enemies=[];queue=[]}
 function endLevel(){
- if(phase!=='fallen'){adapt*=leaks?.92:1.03;adapt=Math.max(1e-9,adapt);
-  const top=Math.max(...EX.map(e=>e.kills));const best=EX.filter(e=>e.kills===top);const w=pick(best);
-  if(top>0){w.score++;msg=leaks?`${w.n} took the most kills, but ${leaks} got through.`:`${w.n} wins level ${level} with ${top} kills.`}
+ if(phase==='fallen'){build();phase='build';phaseT=1.2;core=CORE;return} // retry the same level: enemies forget everything
+ {
+  const sum=EX.reduce((a,e)=>a+e.kills,0);let r=R()*sum,w=EX[0];for(const e of EX){r-=e.kills;if(r<=0){w=e;break}}const top=w.kills; // lucky draw weighted by kills
+  if(top>0){w.score++;msg=`${w.n} wins level ${level} (${top} of ${sum} kills)${attempt>1?` (attempt ${attempt})`:''}.`}
   const bonus=10*G();EX.forEach(x=>x.gold+=bonus/4);beep(660,.12)}
- level++;grow();analyse();newPits();build();phase='build';phaseT=1.2;core=Math.min(20,core+2)}
+ level++;attempt=1;grow();analyse();build();phase='build';phaseT=1.2;core=CORE}
 function build(){ // each explorer draws 3 good spots (same spot = 50/50 duel), then levels up its weakest towers
  const RATE={rare:.07,occasional:.2,often:.5}[S.rate]??.2;
  const cap=S.cap==='auto'?2+Math.floor(Math.sqrt(level)/2):+S.cap;
- const near=s=>{for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)if(tmap.has(key(s.x+dx,s.y+dy)))return true;return false};
- for(let tries=0;tries<(arguments[0]||1);tries++){const picks=[];const free=spots.filter(s=>!tmap.has(s.k)&&!near(s)).slice(0,14);if(!free.length)break;
-  const n=Math.max(...EX.map((_,o)=>towers.filter(t=>t.o===o).length));if(n>=cap||(n>0&&R()>RATE))continue; // build events: all four build together
-  for(let o=0;o<4;o++){if(EX[o].gold<BUILD)EX[o].gold=BUILD;
-   const draw=[pick(free),pick(free),pick(free)].sort((a,b)=>b.cov-a.cov);picks.push({o,s:pick(draw)})}
+ const near=s=>{for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)if(tmap.has(key(s.x+dx,s.y+dy)))return true;return false};
+ for(let tries=0;tries<(arguments[0]||1);tries++){const picks=[];const free=spots.filter(s=>!tmap.has(s.k)&&!near(s)).slice(0,30);if(!free.length)break;
+  for(let o=0;o<4;o++){const ex=EX[o],n=towers.filter(t=>t.o===o).length;if(n>=cap||ex.gold<BUILD||(n>0&&R()>RATE))continue;
+   const draw=[pick(free),pick(free),pick(free)].sort((a,b)=>b.score-a.score);picks.push({o,s:draw[0]})}
   const by=new Map();for(const p of picks){if(!by.has(p.s.k))by.set(p.s.k,[]);by.get(p.s.k).push(p)}
   for(const[k,ps]of by){const w=pick(ps);if(ps.length>1)msg=`${ps.map(p=>EX[p.o].n).join(' & ')} wanted the same spot — ${EX[w.o].n} won the 50/50.`;
-   const place=(o,s)=>{EX[o].gold-=BUILD;const t={x:s.x,y:s.y,k:s.k,o,type:pick(Object.keys(TT)),lvl:1,cd:0};towers.push(t);tmap.set(s.k,t)};place(w.o,w.s);
-   for(const l of ps)if(l!==w){const alt=spots.find(s=>!tmap.has(s.k)&&!near(s));if(alt)place(l.o,alt)}}}
+   EX[w.o].gold-=BUILD;const t={x:w.s.x,y:w.s.y,k,o:w.o,type:pick(Object.keys(TT)),lvl:1,cd:0};towers.push(t);tmap.set(k,t)}}
  for(let o=0;o<4;o++){const ex=EX[o],mine=towers.filter(t=>t.o===o);if(!mine.length)continue;
   for(let n=0;n<5000;n++){let lo=mine[0];for(const t of mine)if(t.lvl<lo.lvl||(t.lvl===lo.lvl&&R()<.3))lo=t;const c=upCost(lo);if(c>ex.gold)break;ex.gold-=c;lo.lvl++}}}
 // ---------- sound ----------
@@ -193,7 +192,9 @@ const cv=document.getElementById('c'),ctx=cv.getContext('2d');let view={s:30,ox:
 const cam={zoom:1,cx:0,cy:0};
 function fit(){const r=cv.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;
  // like the original: show at least a 75 x 100 tile field (long side along the screen's long side), centred on the core
- const side=boundSide()+4,lo=Math.max(75,side),hi=Math.max(100,side),land=cv.width>=cv.height,fw=land?hi:lo,fh=land?lo:hi;
+ const side=boundSide()+4,lo=Math.max(75,side),hi=Math.max(100,side),land=cv.width>=cv.height;let fw=land?hi:lo,fh=land?lo:hi;
+ if(level<70){let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const p of cells){a=Math.min(a,Math.abs(p.x));b=Math.min(b,Math.abs(p.y));c=Math.max(c,Math.abs(p.x));d=Math.max(d,Math.abs(p.y))}
+  const bw=Math.max(9,2*c+5),bh=Math.max(9,2*d+5),t=Math.max(0,Math.min(1,(level-50)/20)),k=t*t*(3-2*t);fw=bw+(fw-bw)*k;fh=bh+(fh-bh)*k} // close-up early, original scale from level 70
  view.fit=Math.min(cv.width/fw,cv.height/fh);view.s=view.fit*cam.zoom;view.ox=cv.width/2-(cam.cx+.5)*view.s;view.oy=cv.height/2-(cam.cy+.5)*view.s}
 const P=(x,y)=>[view.ox+x*view.s,view.oy+y*view.s];
 function drawEnemy(e){const[px,py]=P(e.x,e.y),s=view.s,m=s/2;if(s<10){const z=Math.max(3,s*(e.T.boss?1.2:.7));ctx.fillStyle=e.T.boss?'#ff5a3a':'#e8483a';ctx.fillRect(px+m-z/2,py+m-z/2,z,z);return}const T=e.T,z=T.boss?s*.85:T===ET.rat?s*.38:s*.55;const cx=px+m,cy=py+m;
@@ -218,7 +219,7 @@ function draw(){fit();ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,cv.width
   if(x>cv.width||y>cv.height||x<-s||y<-s)return;if(s<6){ctx.fillStyle=visited.has(i)?'#eed080':'#aa8b67';ctx.fillRect(x,y,Math.ceil(s),Math.ceil(s));return}
   ctx.drawImage(visited.has(i)?p.v:p.u,x,y,s,s);let fin=false;for(const f of finished)if(f.has(i))fin=true;if(fin){ctx.fillStyle='rgba(40,25,10,.35)';ctx.fillRect(x,y,s,s)}});
  gates.forEach(g=>{const[x,y]=P(cells[g].x,cells[g].y),z=Math.max(s,8);ctx.drawImage(IM.en,x+s/2-z/2,y+s/2-z/2,z,z)});
- {const[x0,y0]=P(cells[exit].x,cells[exit].y),z=Math.max(s,12),x=x0+s/2-z/2,y=y0+s/2-z/2;ctx.drawImage(IM.ex,x,y,z,z);ctx.strokeStyle=core>8?'#eed080':'#e0763c';ctx.lineWidth=Math.max(2,z*.07);ctx.beginPath();ctx.arc(x+z/2,y+z/2,z*.62,-Math.PI/2,-Math.PI/2+Math.PI*2*core/20);ctx.stroke()}
+ {const[x0,y0]=P(cells[exit].x,cells[exit].y),z=Math.max(s,12),x=x0+s/2-z/2,y=y0+s/2-z/2;ctx.drawImage(IM.ex,x,y,z,z);ctx.strokeStyle=core>CORE*.4?'#eed080':'#e0763c';ctx.lineWidth=Math.max(2,z*.07);ctx.beginPath();ctx.arc(x+z/2,y+z/2,z*.62,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.max(0,core)/CORE);ctx.stroke()}
  towers.forEach(drawTower);enemies.forEach(drawEnemy);
  for(const f of fx){ctx.globalAlpha=Math.min(1,f.t*4);if(f.k==='shot'){const[a,b]=P(f.x+.5,f.y+.1),[c,d]=P(f.x2+.5,f.y2+.5);ctx.strokeStyle=f.c;ctx.lineWidth=Math.max(1.5,s*.06);ctx.beginPath();ctx.moveTo(a,b);ctx.lineTo(c,d);ctx.stroke()}
   else if(f.k==='ring'){const[a,b]=P(f.x+.5,f.y+.5);ctx.strokeStyle=f.c;ctx.lineWidth=2;ctx.beginPath();ctx.arc(a,b,f.r*s*(1-f.t*2),0,7);ctx.stroke()}
@@ -229,16 +230,16 @@ function draw(){fit();ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,cv.width
 const $=id=>document.getElementById(id);
 $('exs').innerHTML=EX.map((e,i)=>`<div class="ex" id="ex${i}" style="border-color:${e.c}"><img src="data:image/png;base64,${SP[e.k]}" alt=""><div><div class="n">${e.n}</div><div class="k" id="exk${i}"></div></div><div class="s" id="exs${i}">0</div></div>`).join('');
 let lastPrev=-1;
-function hud(){$('lvl').textContent=level;$('era').textContent=Math.floor((level-1)/250)+1;$('core').style.width=Math.max(0,core/20*100)+'%';$('coreT').textContent=Math.max(0,core)+' / 20';
+function hud(){$('lvl').textContent=level;$('era').textContent=Math.floor((level-1)/250)+1;$('core').style.width=Math.max(0,core/CORE*100)+'%';$('coreT').textContent=(attempt>1?`Attempt ${attempt} · `:'')+Math.max(0,core)+' / '+CORE;
  const top=Math.max(...EX.map(e=>e.score));EX.forEach((e,i)=>{$('exs'+i).textContent=e.score;$('exk'+i).textContent=`${e.kills} kills · ${towers.filter(t=>t.o===i).length} towers`;$('ex'+i).classList.toggle('lead',e.score===top&&top>0)});
  if(lastPrev!==level){$('prev').innerHTML=preview(phase==='build'?level:level+1);lastPrev=level}
- $('msg').textContent=msg;$('stats').textContent=`${cells.length} cells · ${towers.length} towers · threat ×${(G()*adapt).toFixed(2)} · ${totalKills} kills`}
+ $('msg').textContent=msg;$('stats').textContent=`${cells.length} cells · ${towers.length} towers · enemy HP ×${G().toFixed(1)} · ${totalKills} kills`}
 $('spd').onclick=()=>{speed=speed===1?4:speed===4?16:1;$('spd').textContent=`Speed ${speed}×`;$('spd').setAttribute('aria-pressed',speed>1)};
 $('sfx').onclick=()=>{sfx=!sfx;$('sfx').setAttribute('aria-pressed',sfx);if(sfx)beep(440,.08)};
 // ---------- boot, reset, jump ----------
 function reset(T){cells.length=0;at.clear();towers=[];tmap.clear();enemies=[];queue=[];fx=[];visited=new Set();
- gro={tip:0,heading:0,remaining:0,boost:1,pending:null,nodes:[0]};level=1;core=20;adapt=1;totalKills=0;phase='build';phaseT=1.2;
- EX.forEach(e=>{e.score=0;e.kills=0;e.gold=60;e.total=0});add(0,0);exit=0;for(let i=0;i<9;i++)grow();analyse();build();
+ gro={tip:0,heading:0,remaining:0,boost:1,pending:null,nodes:[0]};level=1;core=CORE;adapt=1;totalKills=0;phase='build';phaseT=1.2;
+ EX.forEach(e=>{e.score=0;e.kills=0;e.gold=60;e.total=0});attempt=1;core=CORE;add(0,0);exit=0;for(let i=0;i<9;i++)grow();analyse();build();
  while(level<T){level++;grow();if(level%10===0||level===T){analyse();const inc=(2.2*G()*(6+level/10)+10*G())*10;EX.forEach(x=>x.gold+=inc/4);build(10)}}
  analyse();cam.zoom=1;cam.cx=0;cam.cy=0;msg=T>1?`Jumped to level ${T}.`:'The labyrinth stirs.';lastPrev=-1}
 {const m=/L=(\d+)/.exec(location.hash);reset(m?Math.min(5000,+m[1]):1)}
