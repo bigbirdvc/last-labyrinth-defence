@@ -32,6 +32,10 @@ h1{font-size:26px;line-height:1.05;margin:0;font-weight:700;color:var(--hot)}
 button{font:inherit;color:var(--ink);background:#3a2c20;border:1px solid var(--line);border-radius:6px;min-height:44px;padding:0 14px;cursor:pointer;flex:1}
 button[aria-pressed=true]{background:#5a4128;border-color:var(--hot)}
 button:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
+.test{background:#221a14;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:14px}.test summary{cursor:pointer;color:var(--hot)}
+.test label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px}.test select{font:inherit;font-size:14px;background:#3a2c20;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:4px;max-width:60%}
+.jumps{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.jumps button{flex:0 0 auto;min-height:34px;padding:0 10px}
+canvas{touch-action:none;cursor:grab}
 @media(max-width:760px){.wrap{grid-template-columns:1fr;height:auto}.board{height:62vh}.side{border-left:0;border-top:2px solid var(--line)}}
 </style></head><body>
 <div class="wrap">
@@ -44,6 +48,12 @@ button:focus-visible{outline:2px solid var(--hot);outline-offset:2px}
 <div><div class="sub">Next wave</div><div class="prev" id="prev"></div></div>
 <div class="msg" id="msg"></div>
 <div class="sub" id="stats"></div>
+<details class="test"><summary>Test panel</summary>
+<label>Maze type <select id="t_style"><option value="original">Original (Open branches)</option><option value="corridors">Long corridors</option><option value="twisty">Twisty</option><option value="grid">Classic grid</option></select></label>
+<label>New towers <select id="t_rate"><option value="rare">Rare</option><option value="occasional">Occasional</option><option value="often">Often</option></select></label>
+<label>Max towers each <select id="t_cap"><option value="auto">Auto (grows slowly)</option><option value="3">3</option><option value="6">6</option><option value="12">12</option><option value="24">24</option></select></label>
+<div class="jumps">Jump to level <button data-jump="1">1</button><button data-jump="100">100</button><button data-jump="200">200</button><button data-jump="500">500</button><button data-jump="1000">1000</button><button data-jump="2500">2500</button></div>
+</details>
 <div class="btns"><button id="spd" aria-pressed="false">Speed 1×</button><button id="sfx" aria-pressed="false">SFX</button></div>
 </aside>
 </div>
@@ -72,16 +82,52 @@ let exit=0,gates=[],dist=[],pits=new Map(),visited=new Set(),finished=[new Set()
 let spots=[],towers=[],tmap=new Map(),enemies=[],queue=[],fx=[];
 function add(x,y){at.set(key(x,y),cells.length);cells.push({x,y})}
 const nb=i=>{const c=cells[i],o=[];for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const j=at.get(key(c.x+dx,c.y+dy));if(j!==undefined)o.push(j)}return o};
-function grow(){for(let t=0;t<500;t++){const c=cells[(R()*cells.length)|0],[dx,dy]=pick([[1,0],[-1,0],[0,1],[0,-1]]),x=c.x+dx,y=c.y+dy;
- if(at.has(key(x,y)))continue;let n=0;for(const[ax,ay]of[[1,0],[-1,0],[0,1],[0,-1]])if(at.has(key(x+ax,y+ay)))n++;if(n===1){const k=key(x,y),t=tmap.get(k);if(t){tmap.delete(k);towers=towers.filter(q=>q!==t);EX[t.o].gold+=BUILD*.7;msg=`The labyrinth grew under one of ${EX[t.o].n}'s towers.`}add(x,y);return}}}
-function analyse(){ // distances to exit, gates, tower spots
- dist=new Array(cells.length).fill(1e9);dist[exit]=0;const q=[exit];while(q.length){const i=q.shift();for(const j of nb(i))if(dist[j]>dist[i]+1){dist[j]=dist[i]+1;q.push(j)}}
+// ---------- maze growth: +1 tile per level, shape kept ----------
+// Port of Last Labyrinth's "Open branches" rules: grow in straight runs from the tip, sometimes branch
+// elsewhere, avoid crowded spots, stay inside a square whose area grows with the level (so there is space).
+const AREA=[[1,3.36],[100,336],[250,1012.67],[500,1766.67],[1000,3245.67],[2000,4940],[4000,10553],[7500,17111],[10000,22500]];
+function targetArea(n){for(let i=1;i<AREA.length;i++)if(n<=AREA[i][0]){const[a,b]=AREA[i-1],[c,d]=AREA[i];return b+(d-b)*(n-a)/(c-a)}return n*3.36}
+const STYLES={
+ original:{name:'Original (Open branches)',run:()=>1+Math.floor(R()*4),branch:.23,crowd:1.6},
+ corridors:{name:'Long corridors',run:()=>3+Math.floor(R()*6),branch:.10,crowd:1.6},
+ twisty:{name:'Twisty',run:()=>1+Math.floor(R()*2),branch:.40,crowd:1.0},
+ grid:{name:'Classic grid',run:()=>1+Math.floor(R()*3),branch:.25,crowd:0,grid:1}};
+const DIRS=[[1,0],[0,1],[-1,0],[0,-1]];
+let S={style:'original',rate:'occasional',cap:'auto'};
+try{Object.assign(S,JSON.parse(localStorage.getItem('lld-settings')||'{}'))}catch(_){}
+let gro={tip:0,heading:0,remaining:0,boost:1,pending:null,nodes:[0]};
+const boundSide=()=>Math.max(5,Math.ceil(Math.sqrt(Math.max(cells.length*2.25,targetArea(cells.length+1))*2)*gro.boost));
+function removeTowerAt(x,y){const k=key(x,y),t=tmap.get(k);if(t){tmap.delete(k);towers=towers.filter(q=>q!==t);EX[t.o].gold+=BUILD*.7}}
+function grow(){
+ const st=STYLES[S.style]||STYLES.original;
+ if(st.grid&&gro.pending){const p=gro.pending;gro.pending=null;removeTowerAt(p.x,p.y);add(p.x,p.y);gro.tip=cells.length-1;gro.nodes.push(gro.tip);return}
+ for(let attempt=0;attempt<8;attempt++){
+  const side=boundSide(),step=st.grid?2:1;
+  const valid=(x,y,from)=>{if(Math.abs(x)>=side/2||Math.abs(y)>=side/2||at.has(key(x,y)))return false;
+   if(from===0&&nb(0).length)return false; // the core has one way in
+   if(st.grid)return!at.has(key((x+cells[from].x)/2,(y+cells[from].y)/2));
+   let t=0;for(const[dx,dy]of DIRS)if(at.has(key(x+dx,y+dy)))t++;return t===1};
+  const options=i=>{const c=cells[i],o=[];DIRS.forEach(([dx,dy],d)=>{const x=c.x+dx*step,y=c.y+dy*step;if(valid(x,y,i))o.push({x,y,from:i,d})});return o};
+  const crowd=c=>{let s=0;for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)if(Math.max(Math.abs(dx),Math.abs(dy))===2&&at.has(key(c.x+dx,c.y+dy)))s++;return s};
+  const pool=st.grid?gro.nodes:null,rndCell=()=>pool?pool[(R()*pool.length)|0]:(R()*cells.length)|0;
+  let opts=options(gro.tip);
+  if(!opts.length||R()<st.branch){opts=[];for(let k=0;k<36;k++)opts.push(...options(rndCell()));gro.remaining=0}
+  if(!opts.length){const list=pool||cells.map((_,i)=>i);for(let i=list.length-1;i>=0&&!opts.length;i--)opts=options(list[i])}
+  if(!opts.length){gro.boost*=1.15;continue}
+  let best=-1e9,ch;for(const c of opts){let sc=R()*4-crowd(c)*st.crowd;if(c.from===gro.tip&&c.d===gro.heading)sc+=gro.remaining>0?3.5:1;if(sc>best){best=sc;ch=c}}
+  if(ch.from!==gro.tip||ch.d!==gro.heading||gro.remaining<=0)gro.remaining=st.run();
+  gro.remaining--;gro.heading=ch.d;
+  if(st.grid){const f=cells[ch.from],mx=(f.x+ch.x)/2,my=(f.y+ch.y)/2;removeTowerAt(mx,my);add(mx,my);gro.pending={x:ch.x,y:ch.y};return}
+  removeTowerAt(ch.x,ch.y);add(ch.x,ch.y);gro.tip=cells.length-1;return}}
+function analyse(){ // distances to the core, enemy gates, tower spots
+ dist=new Array(cells.length).fill(1e9);dist[exit]=0;const q=[exit];for(let h=0;h<q.length;h++){const i=q[h];for(const j of nb(i))if(dist[j]>dist[i]+1){dist[j]=dist[i]+1;q.push(j)}}
  const leaves=cells.map((_,i)=>i).filter(i=>i!==exit&&nb(i).length===1);const E=cells[exit];gates=[];
  for(let qd=0;qd<4;qd++){let best=-1;for(const i of leaves){const c=cells[i];const a=Math.atan2(c.y-E.y,c.x-E.x);const qq=((Math.floor((a+Math.PI)/(Math.PI/2)))%4);if(qq===qd&&(best<0||dist[i]>dist[best]))best=i}gates.push(best)}
  const far=[...leaves].sort((a,b)=>dist[b]-dist[a]);for(let g=0;g<4;g++)if(gates[g]<0)gates[g]=far[g%far.length]??far[0]??exit;
- const seen=new Set();spots=[];for(const c of cells)for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const x=c.x+dx,y=c.y+dy,k=key(x,y);if(at.has(k)||seen.has(k))continue;seen.add(k);let cov=0;for(const d of cells)if((d.x-x)**2+(d.y-y)**2<=9)cov++;spots.push({x,y,k,cov})}
+ const seen=new Set();spots=[];for(const c of cells)for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const x=c.x+dx,y=c.y+dy,k=key(x,y);if(at.has(k)||seen.has(k))continue;seen.add(k);
+  let cov=0;for(let ax=-3;ax<=3;ax++)for(let ay=-3;ay<=3;ay++)if(ax*ax+ay*ay<=9&&at.has(key(x+ax,y+ay)))cov++;spots.push({x,y,k,cov})}
  spots.sort((a,b)=>b.cov-a.cov)}
-function newPits(){pits.clear();const pool=cells.map((_,i)=>i).filter(i=>i!==exit&&!gates.includes(i)&&dist[i]>1);for(let n=0;n<3&&pool.length;n++){const j=pool.splice((R()*pool.length)|0,1)[0];pits.set(j,'open')}}
+function newPits(){pits.clear()} // pits removed
 // ---------- waves ----------
 const G=()=>Math.pow(1.05,level);
 function waveFor(L){const w=[],n=6+Math.floor(L/10);
@@ -97,7 +143,7 @@ function spawn(s){const T=ET[s.type],g=gates[s.gate],c=cells[g],hp=30*G()*adapt*
 function choose(e){const i=e.cell;if(i===exit){leak(e);return}
  if(pits.get(i)==='open'&&!e.fly){pits.set(i,'sealed');e.dead=1;fx.push({k:'pit',x:cells[i].x,y:cells[i].y,t:.6});msg=`A ${e.type==='mino'?'minotaur':e.type} fell into a pit. It seals.`;beep(90,.15);return}
  const opts=nb(i).filter(j=>!e.seen.has(j)&&!finished[e.gate].has(j));
- let next;if(opts.length){next=pick(opts);e.stack.push(i)}else{finished[e.gate].add(i);next=e.stack.pop();if(next===undefined)next=i}
+ let next;if(opts.length){next=R()<.5?opts.reduce((x,y)=>dist[y]<dist[x]?y:x):pick(opts);e.stack.push(i)}else{finished[e.gate].add(i);next=e.stack.pop();if(next===undefined)next=i}
  e.known=visited.has(next);visited.add(next);e.seen.add(next);e.from=i;e.to=next;e.t=0}
 function leak(e){e.dead=1;const dmg=e.T.boss?5:1;core-=dmg;leaks+=dmg;fx.push({k:'leak',t:.5});beep(60,.25);msg=`${e.type==='mino'?'The minotaur':'An enemy'} reached the core!`}
 function step(dt){
@@ -127,23 +173,30 @@ function endLevel(){
   const bonus=10*G();EX.forEach(x=>x.gold+=bonus/4);beep(660,.12)}
  level++;grow();analyse();newPits();build();phase='build';phaseT=1.2;core=Math.min(20,core+2)}
 function build(){ // each explorer draws 3 good spots (same spot = 50/50 duel), then levels up its weakest towers
- const built=[0,0,0,0];
- for(let round=0;round<3;round++){const picks=[];const free=spots.filter(s=>!tmap.has(s.k)).slice(0,14);if(!free.length)break;
-  for(let o=0;o<4;o++){const ex=EX[o];if(ex.gold<BUILD||R()<.35)continue;const draw=[pick(free),pick(free),pick(free)].sort((a,b)=>b.cov-a.cov);picks.push({o,s:pick(draw)})}
+ const RATE={rare:.07,occasional:.2,often:.5}[S.rate]??.2;
+ const cap=S.cap==='auto'?2+Math.floor(Math.sqrt(level)/2):+S.cap;
+ const near=s=>{for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++)if(tmap.has(key(s.x+dx,s.y+dy)))return true;return false};
+ for(let tries=0;tries<(arguments[0]||1);tries++){const picks=[];const free=spots.filter(s=>!tmap.has(s.k)&&!near(s)).slice(0,14);if(!free.length)break;
+  const n=Math.max(...EX.map((_,o)=>towers.filter(t=>t.o===o).length));if(n>=cap||(n>0&&R()>RATE))continue; // build events: all four build together
+  for(let o=0;o<4;o++){if(EX[o].gold<BUILD)EX[o].gold=BUILD;
+   const draw=[pick(free),pick(free),pick(free)].sort((a,b)=>b.cov-a.cov);picks.push({o,s:pick(draw)})}
   const by=new Map();for(const p of picks){if(!by.has(p.s.k))by.set(p.s.k,[]);by.get(p.s.k).push(p)}
   for(const[k,ps]of by){const w=pick(ps);if(ps.length>1)msg=`${ps.map(p=>EX[p.o].n).join(' & ')} wanted the same spot — ${EX[w.o].n} won the 50/50.`;
-   EX[w.o].gold-=BUILD;built[w.o]++;const t={x:w.s.x,y:w.s.y,k,o:w.o,type:pick(Object.keys(TT)),lvl:1,cd:0};towers.push(t);tmap.set(k,t)}}
+   const place=(o,s)=>{EX[o].gold-=BUILD;const t={x:s.x,y:s.y,k:s.k,o,type:pick(Object.keys(TT)),lvl:1,cd:0};towers.push(t);tmap.set(s.k,t)};place(w.o,w.s);
+   for(const l of ps)if(l!==w){const alt=spots.find(s=>!tmap.has(s.k)&&!near(s));if(alt)place(l.o,alt)}}}
  for(let o=0;o<4;o++){const ex=EX[o],mine=towers.filter(t=>t.o===o);if(!mine.length)continue;
   for(let n=0;n<5000;n++){let lo=mine[0];for(const t of mine)if(t.lvl<lo.lvl||(t.lvl===lo.lvl&&R()<.3))lo=t;const c=upCost(lo);if(c>ex.gold)break;ex.gold-=c;lo.lvl++}}}
 // ---------- sound ----------
 let ac=null;function beep(f,d){if(!sfx)return;try{ac=ac||new AudioContext();const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=.04;g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+d);o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+d)}catch(_){}}
 // ---------- drawing ----------
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');let view={s:30,ox:0,oy:0};
+const cam={zoom:1,cx:0,cy:0};
 function fit(){const r=cv.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=r.width*dpr;cv.height=r.height*dpr;
- let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const p of cells){a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y)}a-=2;b-=2;c+=3;d+=3;
- const s=Math.min(cv.width/(c-a),cv.height/(d-b),cv.width/7);view.ts=s;view.s=Math.min(s,90*dpr);view.ox=(cv.width-(c-a)*view.s)/2-a*view.s;view.oy=(cv.height-(d-b)*view.s)/2-b*view.s}
+ // like the original: show at least a 75 x 100 tile field (long side along the screen's long side), centred on the core
+ const side=boundSide()+4,lo=Math.max(75,side),hi=Math.max(100,side),land=cv.width>=cv.height,fw=land?hi:lo,fh=land?lo:hi;
+ view.fit=Math.min(cv.width/fw,cv.height/fh);view.s=view.fit*cam.zoom;view.ox=cv.width/2-(cam.cx+.5)*view.s;view.oy=cv.height/2-(cam.cy+.5)*view.s}
 const P=(x,y)=>[view.ox+x*view.s,view.oy+y*view.s];
-function drawEnemy(e){const[px,py]=P(e.x,e.y),s=view.s,m=s/2;const T=e.T,z=T.boss?s*.85:T===ET.rat?s*.38:s*.55;const cx=px+m,cy=py+m;
+function drawEnemy(e){const[px,py]=P(e.x,e.y),s=view.s,m=s/2;if(s<10){const z=Math.max(3,s*(e.T.boss?1.2:.7));ctx.fillStyle=e.T.boss?'#ff5a3a':'#e8483a';ctx.fillRect(px+m-z/2,py+m-z/2,z,z);return}const T=e.T,z=T.boss?s*.85:T===ET.rat?s*.38:s*.55;const cx=px+m,cy=py+m;
  ctx.fillStyle='rgba(0,0,0,.35)';ctx.fillRect(cx-z/2,cy+z*.35,z,z*.18);
  ctx.fillStyle=T.col;
  if(e.fly){const f=Math.sin(performance.now()/90)*z*.2;ctx.fillRect(cx-z/2,cy-z/4+f,z*.35,z*.2);ctx.fillRect(cx+z*.15,cy-z/4+f,z*.35,z*.2);ctx.fillRect(cx-z/6,cy-z/3,z/3,z/2)}
@@ -152,7 +205,7 @@ function drawEnemy(e){const[px,py]=P(e.x,e.y),s=view.s,m=s/2;const T=e.T,z=T.bos
   if(T.boss){ctx.fillStyle='#e8d7b0';ctx.fillRect(cx-z*.62,cy-z*.62,z*.2,z*.3);ctx.fillRect(cx+z*.42,cy-z*.62,z*.2,z*.3)}
   ctx.fillStyle='#120d09';ctx.fillRect(cx-z*.25,cy-z*.2,z*.14,z*.14);ctx.fillRect(cx+z*.11,cy-z*.2,z*.14,z*.14)}
  const w=s*.8;ctx.fillStyle='#120d09';ctx.fillRect(px+s*.1,py-s*.08,w,s*.08);ctx.fillStyle=e.hp/e.max>.5?'#8fd16a':'#e0763c';ctx.fillRect(px+s*.1,py-s*.08,w*Math.max(0,e.hp/e.max),s*.08)}
-function drawTower(t){const[px,py]=P(t.x,t.y),s=view.s,ex=EX[t.o];
+function drawTower(t){const[px,py]=P(t.x,t.y),s=view.s,ex=EX[t.o];if(s<10){const z=Math.max(4,s*.9);ctx.fillStyle='#120d09';ctx.fillRect(px+s/2-z/2-1,py+s/2-z/2-1,z+2,z+2);ctx.fillStyle=ex.c;ctx.fillRect(px+s/2-z/2,py+s/2-z/2,z,z);return}
  ctx.fillStyle='rgba(0,0,0,.4)';ctx.fillRect(px+s*.12,py+s*.78,s*.76,s*.14);
  ctx.fillStyle='#3b2e24';ctx.fillRect(px+s*.15,py+s*.45,s*.7,s*.4);ctx.fillStyle=ex.c;ctx.fillRect(px+s*.15,py+s*.45,s*.7,s*.08);
  const g={bolt:'#ffe9a8',ring:'#c7f0ff',pierce:'#ff9bd0',smash:'#ffb37a'}[t.type];ctx.fillStyle=g;
@@ -162,9 +215,10 @@ function drawTower(t){const[px,py]=P(t.x,t.y),s=view.s,ex=EX[t.o];
  if(t.lvl>6){ctx.fillStyle=ex.c;ctx.font=`${Math.max(9,s*.22)}px Pixelify Sans`;ctx.fillText(t.lvl,px+s*.72,py+s*.98)}}
 function draw(){fit();ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,cv.width,cv.height);const s=view.s,p=pal[(level*7)%pal.length]||{u:IM.u,v:IM.v};
  cells.forEach((c,i)=>{const[x,y]=P(c.x,c.y);if(pits.has(i)){ctx.drawImage(pits.get(i)==='open'?IM.po:IM.ps,x,y,s,s);return}
+  if(x>cv.width||y>cv.height||x<-s||y<-s)return;if(s<6){ctx.fillStyle=visited.has(i)?'#eed080':'#aa8b67';ctx.fillRect(x,y,Math.ceil(s),Math.ceil(s));return}
   ctx.drawImage(visited.has(i)?p.v:p.u,x,y,s,s);let fin=false;for(const f of finished)if(f.has(i))fin=true;if(fin){ctx.fillStyle='rgba(40,25,10,.35)';ctx.fillRect(x,y,s,s)}});
- gates.forEach(g=>{const[x,y]=P(cells[g].x,cells[g].y);ctx.drawImage(IM.en,x,y,s,s)});
- {const[x,y]=P(cells[exit].x,cells[exit].y);ctx.drawImage(IM.ex,x,y,s,s);ctx.strokeStyle=core>8?'#eed080':'#e0763c';ctx.lineWidth=Math.max(2,s*.07);ctx.beginPath();ctx.arc(x+s/2,y+s/2,s*.62,-Math.PI/2,-Math.PI/2+Math.PI*2*core/20);ctx.stroke()}
+ gates.forEach(g=>{const[x,y]=P(cells[g].x,cells[g].y),z=Math.max(s,8);ctx.drawImage(IM.en,x+s/2-z/2,y+s/2-z/2,z,z)});
+ {const[x0,y0]=P(cells[exit].x,cells[exit].y),z=Math.max(s,12),x=x0+s/2-z/2,y=y0+s/2-z/2;ctx.drawImage(IM.ex,x,y,z,z);ctx.strokeStyle=core>8?'#eed080':'#e0763c';ctx.lineWidth=Math.max(2,z*.07);ctx.beginPath();ctx.arc(x+z/2,y+z/2,z*.62,-Math.PI/2,-Math.PI/2+Math.PI*2*core/20);ctx.stroke()}
  towers.forEach(drawTower);enemies.forEach(drawEnemy);
  for(const f of fx){ctx.globalAlpha=Math.min(1,f.t*4);if(f.k==='shot'){const[a,b]=P(f.x+.5,f.y+.1),[c,d]=P(f.x2+.5,f.y2+.5);ctx.strokeStyle=f.c;ctx.lineWidth=Math.max(1.5,s*.06);ctx.beginPath();ctx.moveTo(a,b);ctx.lineTo(c,d);ctx.stroke()}
   else if(f.k==='ring'){const[a,b]=P(f.x+.5,f.y+.5);ctx.strokeStyle=f.c;ctx.lineWidth=2;ctx.beginPath();ctx.arc(a,b,f.r*s*(1-f.t*2),0,7);ctx.stroke()}
@@ -181,9 +235,28 @@ function hud(){$('lvl').textContent=level;$('era').textContent=Math.floor((level
  $('msg').textContent=msg;$('stats').textContent=`${cells.length} cells · ${towers.length} towers · threat ×${(G()*adapt).toFixed(2)} · ${totalKills} kills`}
 $('spd').onclick=()=>{speed=speed===1?4:speed===4?16:1;$('spd').textContent=`Speed ${speed}×`;$('spd').setAttribute('aria-pressed',speed>1)};
 $('sfx').onclick=()=>{sfx=!sfx;$('sfx').setAttribute('aria-pressed',sfx);if(sfx)beep(440,.08)};
-// ---------- boot ----------
-add(0,0);exit=0;for(let i=0;i<9;i++)grow();analyse();newPits();build();
-{const m=/L=(\d+)/.exec(location.hash);if(m){const T=Math.min(5000,+m[1]);while(level<T){level++;grow();if(level%10===0||level===T){analyse();const inc=(2.2*G()*(6+level/10)+10*G())*10;EX.forEach(x=>x.gold+=inc/4);build()}}analyse();newPits();adapt=1}}
+// ---------- boot, reset, jump ----------
+function reset(T){cells.length=0;at.clear();towers=[];tmap.clear();enemies=[];queue=[];fx=[];visited=new Set();
+ gro={tip:0,heading:0,remaining:0,boost:1,pending:null,nodes:[0]};level=1;core=20;adapt=1;totalKills=0;phase='build';phaseT=1.2;
+ EX.forEach(e=>{e.score=0;e.kills=0;e.gold=60;e.total=0});add(0,0);exit=0;for(let i=0;i<9;i++)grow();analyse();build();
+ while(level<T){level++;grow();if(level%10===0||level===T){analyse();const inc=(2.2*G()*(6+level/10)+10*G())*10;EX.forEach(x=>x.gold+=inc/4);build(10)}}
+ analyse();cam.zoom=1;cam.cx=0;cam.cy=0;msg=T>1?`Jumped to level ${T}.`:'The labyrinth stirs.';lastPrev=-1}
+{const m=/L=(\d+)/.exec(location.hash);reset(m?Math.min(5000,+m[1]):1)}
+// zoom and pan: wheel, pinch, drag; double-click resets
+{const pts=new Map();let pinch=0;
+ const zoomAt=(px,py,f)=>{const dpr=devicePixelRatio||1;px*=dpr;py*=dpr;const gx=(px-view.ox)/view.s,gy=(py-view.oy)/view.s;cam.zoom=Math.max(1,Math.min(40,cam.zoom*f));const s=view.fit*cam.zoom;cam.cx=gx-.5-(px-cv.width/2)/s;cam.cy=gy-.5-(py-cv.height/2)/s;if(cam.zoom===1){cam.cx=0;cam.cy=0}};
+ cv.addEventListener('wheel',e=>{e.preventDefault();const r=cv.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top,Math.exp(-e.deltaY*.0015))},{passive:false});
+ cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);pts.set(e.pointerId,{x:e.clientX,y:e.clientY})});
+ cv.addEventListener('pointermove',e=>{const o=pts.get(e.pointerId);if(!o)return;const dpr=devicePixelRatio||1;
+  if(pts.size===1){cam.cx-=(e.clientX-o.x)*dpr/view.s;cam.cy-=(e.clientY-o.y)*dpr/view.s}
+  else{const a=[...pts.values()];const d0=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);pts.set(e.pointerId,{x:e.clientX,y:e.clientY});const b=[...pts.values()];const d1=Math.hypot(b[0].x-b[1].x,b[0].y-b[1].y);const r=cv.getBoundingClientRect();if(d0>0)zoomAt((b[0].x+b[1].x)/2-r.left,(b[0].y+b[1].y)/2-r.top,d1/d0);return}
+  pts.set(e.pointerId,{x:e.clientX,y:e.clientY})});
+ const up=e=>pts.delete(e.pointerId);cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+ cv.addEventListener('dblclick',()=>{cam.zoom=1;cam.cx=0;cam.cy=0})}
+// test panel
+{const save=()=>{try{localStorage.setItem('lld-settings',JSON.stringify(S))}catch(_){}};
+ for(const id of['style','rate','cap']){const el=$('t_'+id);el.value=S[id];el.onchange=()=>{S[id]=el.value;save();if(id==='style')reset(level)}}
+ document.querySelectorAll('[data-jump]').forEach(b=>b.onclick=()=>reset(+b.dataset.jump))}
 let last=performance.now(),acc=0;
 function loop(now){acc+=Math.min(.25,(now-last)/1000)*speed;last=now;const dt=1/60;let n=0;while(acc>=dt&&n<2000){step(dt);acc-=dt;n++}
  for(const f of fx)f.t-=(now-last+16)/1000;fx=fx.filter(f=>f.t>0);if(fx.length>400)fx.splice(0,fx.length-400);draw();hud();requestAnimationFrame(loop)}
