@@ -183,6 +183,7 @@ $('spd').onclick=()=>{speed=speed===1?4:speed===4?16:1;$('spd').textContent=`Spe
 $('sfx').onclick=()=>{sfx=!sfx;$('sfx').setAttribute('aria-pressed',sfx);if(sfx)beep(440,.08)};
 // ---------- boot ----------
 add(0,0);exit=0;for(let i=0;i<9;i++)grow();analyse();newPits();build();
+{const m=/L=(\d+)/.exec(location.hash);if(m){const T=Math.min(5000,+m[1]);while(level<T){level++;grow();if(level%10===0||level===T){analyse();const inc=(2.2*G()*(6+level/10)+10*G())*10;EX.forEach(x=>x.gold+=inc/4);build()}}analyse();newPits();adapt=1}}
 let last=performance.now(),acc=0;
 function loop(now){acc+=Math.min(.25,(now-last)/1000)*speed;last=now;const dt=1/60;let n=0;while(acc>=dt&&n<2000){step(dt);acc-=dt;n++}
  for(const f of fx)f.t-=(now-last+16)/1000;fx=fx.filter(f=>f.t>0);if(fx.length>400)fx.splice(0,fx.length-400);draw();hud();requestAnimationFrame(loop)}
