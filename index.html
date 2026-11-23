@@ -43,7 +43,7 @@ canvas{touch-action:none;cursor:grab}
 <aside class="side">
 <h1>Last Labyrinth Defence</h1>
 <div class="lv"><div><span class="sub">Level</span><br><b id="lvl">1</b></div><div style="text-align:right"><span class="sub">Era</span><br><b id="era" style="font-size:22px">1</b></div></div>
-<div><div class="lv sub"><span>Core</span><span id="coreT"></span></div><div class="bar"><i id="core"></i></div></div>
+<div><div class="lv sub"><span>Exit</span><span id="coreT"></span></div><div class="bar"><i id="core"></i></div></div>
 <div id="exs" style="display:grid;gap:6px"></div>
 <div><div class="sub">Next wave</div><div class="prev" id="prev"></div></div>
 <div class="msg" id="msg"></div>
@@ -76,7 +76,7 @@ const TT={ // tower types: range, dmg, rate, flags
 const ET={rat:{hp:.5,sp:1.6,b:.6,col:'#9a948c'},grunt:{hp:1,sp:1,b:1,col:'#7a5a3a'},knight:{hp:2,sp:.8,b:1.6,ar:.5,col:'#c8ccd4'},bat:{hp:.8,sp:1,b:1.2,fly:1,col:'#8b5fbf'},mino:{hp:12,sp:.6,b:14,boss:1,col:'#8a3b22'}};
 const BUILD=60, upCost=t=>BUILD*Math.pow(1.6,t.lvl);
 // ---------- state ----------
-const CORE=10;let attempt=1,level=1,core=10,adapt=1,leaks=0,speed=1,sfx=false,phase='build',phaseT=1.2,msg='The labyrinth stirs.',totalKills=0;
+const CORE=1;let attempt=1,level=1,core=10,adapt=1,leaks=0,speed=1,sfx=false,phase='build',phaseT=1.2,msg='The labyrinth stirs.',totalKills=0;
 const cells=[],at=new Map(),key=(x,y)=>x+','+y;
 let exit=0,gates=[],dist=[],pits=new Map(),visited=new Set(),finished=[new Set(),new Set(),new Set(),new Set()];
 let spots=[],towers=[],tmap=new Map(),enemies=[],queue=[],fx=[];
@@ -138,7 +138,7 @@ function waveFor(L){const w=[],n=6+Math.floor(L/10);
  if(L%10===0)w.push('mino');return w}
 function preview(L){const c={};for(const t of waveFor(L))c[t]=(c[t]||0)+1;const nm={grunt:'Grunt',rat:'Rat',knight:'Knight',bat:'Bat',mino:'Minotaur'};return Object.entries(c).map(([t,n])=>`<span>${nm[t]} ×${n}</span>`).join('')}
 function startWave(){const list=waveFor(level);let t=0.5;queue=list.map((type,i)=>({type,gate:i%4,t:t+=type==='rat'?0.35:0.8}));phase='wave';leaks=0;visited=new Set();finished=[new Set(),new Set(),new Set(),new Set()];EX.forEach(e=>e.kills=0)}
-function spawn(s){const T=ET[s.type],g=gates[s.gate],c=cells[g],hp=30*G()*T.hp;
+function spawn(s){const T=ET[s.type],g=gates[s.gate],c=cells[g],hp=20*G()*T.hp;
  enemies.push({type:s.type,T,hp,max:hp,gate:s.gate,cell:g,from:g,to:g,t:1,x:c.x,y:c.y,stack:[],seen:new Set([g]),slow:0,fly:T.fly,fx:c.x,fy:c.y,prog:dist[g]})}
 // ---------- simulation ----------
 function choose(e){const i=e.cell;if(i===exit){leak(e);return}
@@ -146,14 +146,14 @@ function choose(e){const i=e.cell;if(i===exit){leak(e);return}
  const opts=nb(i).filter(j=>!e.seen.has(j)&&!finished[e.gate].has(j));
  let next;if(opts.length){next=R()<.5?opts.reduce((x,y)=>dist[y]<dist[x]?y:x):pick(opts);e.stack.push(i)}else{finished[e.gate].add(i);next=e.stack.pop();if(next===undefined)next=i}
  e.known=visited.has(next);visited.add(next);e.seen.add(next);e.from=i;e.to=next;e.t=0}
-function leak(e){e.dead=1;const dmg=e.T.boss?5:1;core-=dmg;leaks+=dmg;fx.push({k:'leak',t:.5});beep(60,.25);msg=`${e.type==='mino'?'The minotaur':'An enemy'} reached the core!`}
+function leak(e){e.dead=1;const dmg=1;core-=dmg;leaks+=dmg;fx.push({k:'leak',t:.5});beep(60,.25);msg=`${e.type==='mino'?'The minotaur':'An enemy'} reached the core!`}
 function step(dt){
  if(phase==='build'){phaseT-=dt;if(phaseT<=0)startWave();return}
  if(phase==='fallen'){phaseT-=dt;if(phaseT<=0)endLevel();return}
  for(const s of queue)s.t-=dt;while(queue.length&&queue[0].t<=0)spawn(queue.shift());
  for(const e of enemies){if(e.dead)continue;const sp=0.55*e.T.sp*(e.slow>0?.6:1);e.slow-=dt;
   if(e.fly){const E=cells[exit],dx=E.x-e.x,dy=E.y-e.y,d=Math.hypot(dx,dy);if(d<.1){leak(e);continue}const m=Math.min(d,sp*1.3*dt);e.x+=dx/d*m;e.y+=dy/d*m;e.prog=d;continue}
-  e.t+=sp*(e.known?5:1)*dt;if(e.t>=1){e.cell=e.to;e.x=cells[e.cell].x;e.y=cells[e.cell].y;choose(e)}else{const a=cells[e.from],b=cells[e.to];e.x=a.x+(b.x-a.x)*e.t;e.y=a.y+(b.y-a.y)*e.t}
+  e.t+=sp*(e.known?3:1)*dt;if(e.t>=1){e.cell=e.to;e.x=cells[e.cell].x;e.y=cells[e.cell].y;choose(e)}else{const a=cells[e.from],b=cells[e.to];e.x=a.x+(b.x-a.x)*e.t;e.y=a.y+(b.y-a.y)*e.t}
   e.prog=dist[e.to]-(e.t<1?0:0)}
  for(let i=towers.length-1;i>0;i--){const j=(R()*(i+1))|0;[towers[i],towers[j]]=[towers[j],towers[i]]}
  for(const t of towers){t.cd-=dt;if(t.cd>0)continue;const T=TT[t.type],r2=T.r*T.r,dm=T.d*Math.pow(1.6,t.lvl-1);
@@ -164,7 +164,7 @@ function step(dt){
  if(core<=0){collapse();return}
  if(!queue.length&&!enemies.length)endLevel()}
 function hit(e,d,t){if(e.dead)return;e.hp-=d*(1-(e.T.ar||0));if(e.hp<=0){e.dead=1;const ex=EX[t.o];ex.kills++;ex.total++;totalKills++;const g=2.2*G()*e.T.b;EX.forEach(x=>x.gold+=g/4);fx.push({k:'pop',x:e.x,y:e.y,c:ex.c,t:.4});if(R()<.3)beep(520+R()*200,.04)}}
-function collapse(){phase='fallen';phaseT=1.6;attempt++;msg=`The core broke! Level ${level} starts again (attempt ${attempt}).`;beep(50,.6);
+function collapse(){phase='fallen';phaseT=1.6;attempt++;msg=`An enemy reached the exit! Level ${level} starts again (attempt ${attempt}).`;beep(50,.6);
  for(const e of enemies)e.dead=1;enemies=[];queue=[]}
 function endLevel(){
  if(phase==='fallen'){build();phase='build';phaseT=1.2;core=CORE;return} // retry the same level: enemies forget everything
@@ -230,7 +230,7 @@ function draw(){fit();ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,cv.width
 const $=id=>document.getElementById(id);
 $('exs').innerHTML=EX.map((e,i)=>`<div class="ex" id="ex${i}" style="border-color:${e.c}"><img src="data:image/png;base64,${SP[e.k]}" alt=""><div><div class="n">${e.n}</div><div class="k" id="exk${i}"></div></div><div class="s" id="exs${i}">0</div></div>`).join('');
 let lastPrev=-1;
-function hud(){$('lvl').textContent=level;$('era').textContent=Math.floor((level-1)/250)+1;$('core').style.width=Math.max(0,core/CORE*100)+'%';$('coreT').textContent=(attempt>1?`Attempt ${attempt} · `:'')+Math.max(0,core)+' / '+CORE;
+function hud(){$('lvl').textContent=level;$('era').textContent=Math.floor((level-1)/250)+1;$('core').style.width=Math.max(0,core/CORE*100)+'%';$('coreT').textContent=`Attempt ${attempt}`;
  const top=Math.max(...EX.map(e=>e.score));EX.forEach((e,i)=>{$('exs'+i).textContent=e.score;$('exk'+i).textContent=`${e.kills} kills · ${towers.filter(t=>t.o===i).length} towers`;$('ex'+i).classList.toggle('lead',e.score===top&&top>0)});
  if(lastPrev!==level){$('prev').innerHTML=preview(phase==='build'?level:level+1);lastPrev=level}
  $('msg').textContent=msg;$('stats').textContent=`${cells.length} cells · ${towers.length} towers · enemy HP ×${G().toFixed(1)} · ${totalKills} kills`}
