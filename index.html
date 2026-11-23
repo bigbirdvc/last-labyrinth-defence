@@ -124,8 +124,9 @@ function analyse(){ // distances to the core, enemy gates, tower spots
  const leaves=cells.map((_,i)=>i).filter(i=>i!==exit&&nb(i).length===1);const E=cells[exit];gates=[];
  for(let qd=0;qd<4;qd++){let best=-1;for(const i of leaves){const c=cells[i];const a=Math.atan2(c.y-E.y,c.x-E.x);const qq=((Math.floor((a+Math.PI)/(Math.PI/2)))%4);if(qq===qd&&(best<0||dist[i]>dist[best]))best=i}gates.push(best)}
  const far=[...leaves].sort((a,b)=>dist[b]-dist[a]);for(let g=0;g<4;g++)if(gates[g]<0)gates[g]=far[g%far.length]??far[0]??exit;
+ const route=new Set();for(const g of gates){let i=g,n=0;while(i!==exit&&n++<1e5){route.add(i);let nx=i;for(const j of nb(i))if(dist[j]<dist[nx])nx=j;if(nx===i)break;i=nx}}route.add(exit);
  const seen=new Set();spots=[];for(const c of cells)for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const x=c.x+dx,y=c.y+dy,k=key(x,y);if(at.has(k)||seen.has(k))continue;seen.add(k);
-  let cov=0;for(let ax=-3;ax<=3;ax++)for(let ay=-3;ay<=3;ay++)if(ax*ax+ay*ay<=9&&at.has(key(x+ax,y+ay)))cov++;spots.push({x,y,k,cov})}
+  let cov=0;for(let ax=-3;ax<=3;ax++)for(let ay=-3;ay<=3;ay++)if(ax*ax+ay*ay<=9){const j=at.get(key(x+ax,y+ay));if(j!==undefined)cov+=route.has(j)?3:1}spots.push({x,y,k,cov})}
  let mr=1;for(const c of cells)mr=Math.max(mr,Math.hypot(c.x,c.y));for(const s of spots)s.score=s.cov*(.35+Math.hypot(s.x,s.y)/mr);
  spots.sort((a,b)=>b.score-a.score)}
 function newPits(){pits.clear()} // pits removed
@@ -133,7 +134,7 @@ function newPits(){pits.clear()} // pits removed
 const G=()=>Math.pow(1.05,level);
 function waveFor(L){const w=[],n=6+Math.floor(L/10);
  for(let i=0;i<n;i++)w.push(L>=6&&i%4===3?'knight':'grunt');
- if(L>=3)for(let i=0;i<Math.ceil(n/2);i++)w.push('rat');
+ if(L>=8)for(let i=0;i<Math.ceil(n/2);i++)w.push('rat');
  if(L>=12&&L%3===0)for(let i=0;i<3;i++)w.push('bat');
  if(L%10===0)w.push('mino');return w}
 function preview(L){const c={};for(const t of waveFor(L))c[t]=(c[t]||0)+1;const nm={grunt:'Grunt',rat:'Rat',knight:'Knight',bat:'Bat',mino:'Minotaur'};return Object.entries(c).map(([t,n])=>`<span>${nm[t]} ×${n}</span>`).join('')}
@@ -164,7 +165,7 @@ function step(dt){
  if(core<=0){collapse();return}
  if(!queue.length&&!enemies.length)endLevel()}
 function hit(e,d,t){if(e.dead)return;e.hp-=d*(1-(e.T.ar||0));if(e.hp<=0){e.dead=1;const ex=EX[t.o];ex.kills++;ex.total++;totalKills++;const g=2.2*G()*e.T.b;EX.forEach(x=>x.gold+=g/4);fx.push({k:'pop',x:e.x,y:e.y,c:ex.c,t:.4});if(R()<.3)beep(520+R()*200,.04)}}
-function collapse(){phase='fallen';phaseT=1.6;attempt++;msg=`An enemy reached the exit! Level ${level} starts again (attempt ${attempt}).`;beep(50,.6);
+function collapse(){phase='fallen';phaseT=1.6;attempt++;{const g=BUILD*G()*attempt;EX.forEach(x=>x.gold+=g/4)}msg=`An enemy reached the exit! Level ${level} starts again (attempt ${attempt}).`;beep(50,.6);
  for(const e of enemies)e.dead=1;enemies=[];queue=[]}
 function endLevel(){
  if(phase==='fallen'){build();phase='build';phaseT=1.2;core=CORE;return} // retry the same level: enemies forget everything
