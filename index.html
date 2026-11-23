@@ -177,7 +177,7 @@ function build(){ // each explorer draws 3 good spots (same spot = 50/50 duel), 
  const RATE={rare:.07,occasional:.2,often:.5}[S.rate]??.2;
  const cap=S.cap==='auto'?2+Math.floor(Math.sqrt(level)/2):+S.cap;
  const near=s=>{for(let dx=-2;dx<=2;dx++)for(let dy=-2;dy<=2;dy++)if(tmap.has(key(s.x+dx,s.y+dy)))return true;return false};
- for(let tries=0;tries<(arguments[0]||1);tries++){const picks=[];const free=spots.filter(s=>!tmap.has(s.k)&&!near(s)).slice(0,30);if(!free.length)break;
+ for(let tries=0;tries<(arguments[0]||1);tries++){const picks=[];let free=spots.filter(s=>!tmap.has(s.k)&&!near(s)).slice(0,30);if(free.length<4)free=spots.filter(s=>!tmap.has(s.k)).slice(0,30);if(!free.length)break;
   for(let o=0;o<4;o++){const ex=EX[o],n=towers.filter(t=>t.o===o).length;if(n>=cap||ex.gold<BUILD||(n>0&&R()>RATE))continue;
    const draw=[pick(free),pick(free),pick(free)].sort((a,b)=>b.score-a.score);picks.push({o,s:draw[0]})}
   const by=new Map();for(const p of picks){if(!by.has(p.s.k))by.set(p.s.k,[]);by.get(p.s.k).push(p)}
